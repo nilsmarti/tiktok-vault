@@ -1,0 +1,45 @@
+services:
+  redis:
+    image: redis:7-alpine
+    command: ["redis-server", "--appendonly", "yes"]   # queued jobs survive restarts
+    volumes: [redis:/data]
+    restart: unless-stopped
+
+  bot:
+    build: .
+    command: ["python", "-m", "app.bot"]
+    env_file: .env
+    volumes:
+      - ./profiles.yaml:/config/profiles.yaml:ro
+    depends_on: [redis]
+    restart: unless-stopped
+
+  worker:
+    build: .
+    # TikTok breaks extractors regularly: pull the latest yt-dlp/gallery-dl on every start.
+    command:
+      - sh
+      - -c
+      - "pip install --user -q -U 'yt-dlp[default,curl-cffi]' gallery-dl || true; exec arq app.worker.WorkerSettings"
+    env_file: .env
+    volumes:
+      - ./profiles.yaml:/config/profiles.yaml:ro
+      - ./secrets:/secrets:ro          # optional tiktok cookies.txt
+      - data:/data                     # sqlite index + temp work dirs
+    depends_on: [redis]
+    restart: unless-stopped
+
+  # Optional local Whisper (OpenAI-compatible). Or point STT_BASE_URL at whatever you already run.
+  # stt:
+  #   image: ghcr.io/speaches-ai/speaches:latest-cuda
+  #   deploy:
+  #     resources:
+  #       reservations:
+  #         devices: [{driver: nvidia, count: 1, capabilities: [gpu]}]
+  #   volumes: [hf-cache:/home/ubuntu/.cache/huggingface/hub]
+  #   restart: unless-stopped
+
+volumes:
+  redis: {}
+  data: {}
+  # hf-cache: {}

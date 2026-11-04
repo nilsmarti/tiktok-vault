@@ -1,0 +1,16 @@
+# One entry per person. Key = slug used as the S3 prefix.
+# Get your Telegram user ID by sending /start to the bot.
+profiles:
+  nils:
+    telegram_user_id: 111111111
+    notion_token: ${NOTION_TOKEN_NILS}
+    notion_database_id: 0123456789abcdef0123456789abcdef
+    focus: "food spots, restaurants and bars to try, travel spots, gadgets"
+    video_mode: auto        # auto | upload | external
+
+  partner:
+    telegram_user_id: 222222222
+    notion_token: ${NOTION_TOKEN_PARTNER}
+    notion_database_id: fedcba9876543210fedcba9876543210
+    focus: "creative inspiration for art/design projects: techniques, aesthetics, colour palettes, materials"
+    video_mode: auto

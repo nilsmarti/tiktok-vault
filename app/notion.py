@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import datetime as dt
+import hashlib
 import math
 from pathlib import Path
 
@@ -19,9 +20,10 @@ TEXT_MAX = 1900
 
 
 class Notion:
-    def __init__(self, http: httpx.AsyncClient, token: str):
+    def __init__(self, http: httpx.AsyncClient, token: str, redis=None):
         self.http = http
         self.token = token
+        self.redis = redis
         self._limit: int | None | bool = False  # False = not fetched yet
 
     def _headers(self, json_body: bool = True) -> dict:
@@ -32,6 +34,16 @@ class Notion:
 
     async def _req(self, method: str, path: str, *, json_body: bool = True, **kw) -> dict:
         for attempt in range(5):
+            if self.redis is not None:
+                key = "notion-rate:" + hashlib.sha256(self.token.encode()).hexdigest()
+                delay = await self.redis.eval("""
+                    local t = redis.call('TIME')
+                    local now = tonumber(t[1]) + tonumber(t[2]) / 1000000
+                    local slot = math.max(now, tonumber(redis.call('GET', KEYS[1]) or '0'))
+                    redis.call('SET', KEYS[1], tostring(slot + 0.4), 'EX', 3600)
+                    return tostring(slot - now)
+                """, 1, key)
+                await asyncio.sleep(float(delay))
             r = await self.http.request(method, f"{API}{path}", headers=self._headers(json_body),
                                         timeout=300, **kw)
             if r.status_code == 429 or r.status_code >= 500:
@@ -67,6 +79,19 @@ class Notion:
                                 data={"part_number": str(n)})
         await self._req("POST", f"/file_uploads/{fu['id']}/complete", json={})
         return fu["id"]
+
+    async def database_schema(self, database_id: str) -> dict:
+        return (await self._req("GET", f"/databases/{database_id}"))["properties"]
+
+    async def find_existing(self, database_id: str, schema: dict,
+                            mapping: dict[str, str], url: str) -> dict | None:
+        prop = mapping.get("URL", "URL")
+        if schema.get(prop, {}).get("type") != "url":
+            return None
+        response = await self._req("POST", f"/databases/{database_id}/query", json={
+            "filter": {"property": prop, "url": {"equals": url}}, "page_size": 1,
+        })
+        return next(iter(response.get("results", [])), None)
 
     async def create_page(self, database_id: str, properties: dict, children: list[dict],
                           cover_upload_id: str | None = None) -> dict:
@@ -169,3 +194,31 @@ def build_body(ex: Extraction, meta: dict, transcript: str, media_blocks: list[d
     if url := meta.get("webpage_url"):
         blocks.append(paragraph("Original post", url))
     return blocks
+
+
+def adapt_properties(properties: dict, schema: dict, mapping: dict[str, str]) -> dict:
+    """Use existing fields without changing the database schema."""
+    title = next((name for name, prop in schema.items() if prop["type"] == "title"), None)
+    if title is None:
+        raise ValueError("Notion database has no title property")
+    result = {}
+    for source, value in properties.items():
+        target = mapping.get(source, title if source == "Name" else source)
+        if not target:
+            continue
+        expected = next(iter(value))
+        if target not in schema:
+            if source in mapping or source == "Name":
+                raise ValueError(f"Notion property {target!r} does not exist")
+            continue
+        actual = schema[target]["type"]
+        if actual != expected:
+            if source not in mapping and source != "Name":
+                continue
+            raise ValueError(f"Notion property {target!r} has type {actual}, expected {expected}")
+        if target in result:
+            raise ValueError(f"Multiple fields map to Notion property {target!r}")
+        result[target] = value
+    if title not in result:
+        raise ValueError("Name must map to the database title")
+    return result

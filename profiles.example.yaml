@@ -7,6 +7,11 @@ profiles:
     notion_database_id: 0123456789abcdef0123456789abcdef
     focus: "food spots, restaurants and bars to try, travel spots, gadgets"
     video_mode: auto        # auto | upload | external
+    # Existing database: title auto-detected; optional fields may be mapped or disabled.
+    # notion_properties:
+    #   URL: Source
+    #   Tags: Topics
+    #   Status: ""
 
   partner:
     telegram_user_id: 222222222

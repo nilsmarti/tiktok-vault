@@ -8,7 +8,9 @@ from pathlib import Path
 
 class Store:
     def __init__(self, path: Path):
-        self.conn = sqlite3.connect(path, check_same_thread=False)
+        self.conn = sqlite3.connect(path, check_same_thread=False, timeout=30)
+        self.conn.execute("PRAGMA journal_mode=WAL")
+        self.conn.execute("PRAGMA busy_timeout=30000")
         self.conn.execute(
             """CREATE TABLE IF NOT EXISTS items (
                 profile TEXT NOT NULL, platform TEXT NOT NULL, post_id TEXT NOT NULL,

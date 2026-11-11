@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import os
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from functools import lru_cache
 from pathlib import Path
 
@@ -17,6 +17,7 @@ class Profile:
     name: str  # slug, used as S3 prefix
     notion_token: str
     notion_database_id: str
+    notion_properties: dict[str, str] = field(default_factory=dict)
     focus: str = ""  # hint for the LLM: what this person saves stuff for
     video_mode: str = "auto"  # auto | upload (into Notion) | external (public S3 URL)
 
@@ -67,11 +68,17 @@ def _load_profiles(path: Path) -> dict[int, Profile]:
         if mode not in VIDEO_MODES:
             raise ValueError(f"profile {name}: video_mode must be one of {VIDEO_MODES}")
         uid = int(p["telegram_user_id"])
+        if uid in profiles:
+            raise ValueError(f"duplicate telegram_user_id: {uid}")
+        mapping = p.get("notion_properties", {})
+        if not isinstance(mapping, dict) or not all(isinstance(k, str) and isinstance(v, str) for k, v in mapping.items()):
+            raise ValueError(f"profile {name}: notion_properties must map property names to strings")
         profiles[uid] = Profile(
             telegram_user_id=uid,
             name=name,
             notion_token=p["notion_token"],
             notion_database_id=p["notion_database_id"].replace("-", ""),
+            notion_properties=mapping,
             focus=p.get("focus", ""),
             video_mode=mode,
         )

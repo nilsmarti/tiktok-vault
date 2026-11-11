@@ -13,6 +13,8 @@ Telegram ─► bot ─► Redis (arq) ─► worker: canonicalize → dedupe �
 
 1. **Bot**: create it with @BotFather, put the token in `.env`.
 2. **Notion (each person, in their own workspace)**
+   - For an existing database, connect the integration to it and use its ID in the profile. See property mapping below.
+   - To create a new database:
    - Create an internal integration (notion.so/profile/integrations), copy its token.
    - Create an empty page, connect the integration to it (page `•••` → Connections).
    - `docker compose run --rm worker python scripts/setup_notion_db.py --token ntn_... --parent-page <page url>`
@@ -26,6 +28,58 @@ Telegram ─► bot ─► Redis (arq) ─► worker: canonicalize → dedupe �
 6. `docker compose up -d --build`
 
 Usage: in TikTok, **Share → Telegram → the bot**, or paste links (several per message is fine).
+For a favorites import, send the bot a UTF-8 `.json` or `.txt` favorites file from your TikTok data export (up to 20 MiB).
+Extract the export ZIP first. Every TikTok link in the supplied file is imported, so send the favorites file rather than
+an entire export containing browsing history if you only want favorites. Normal post URLs, `tiktokv.com/share/video` export links, and vm/vt short links are supported.
+Repeated canonical post links are collapsed before queuing.
+
+## Existing databases and multiple users
+
+Each profile selects its own Notion integration, database, AI focus, and S3 prefix. Add one profile per Telegram user;
+duplicate Telegram IDs are rejected. Profiles can target the same database or different workspaces.
+The integration needs access to the target database. Existing databases must have a single data source, as this
+project still uses the pinned database API.
+
+The database's title field is detected automatically. Matching optional fields are populated when their types match;
+absent fields or incompatible optional fields are skipped. Existing rows are left untouched, and no properties are created or renamed. Notion may add new select or multi-select options when pages are saved.
+Use `notion_properties` to map the pipeline's standard fields to your existing names:
+
+```yaml
+profiles:
+  nils:
+    telegram_user_id: 111111111
+    notion_token: ${NOTION_TOKEN_NILS}
+    notion_database_id: 0123456789abcdef0123456789abcdef
+    notion_properties:
+      URL: Source          # must be a URL property
+      Tags: Topics         # must be a multi-select property
+      Summary: Notes       # must be a rich-text property
+      Status: ""           # leave this field unpopulated
+```
+
+Explicit mappings to missing or incompatible fields produce an error before downloading. The Name field must
+map to the database's title field. When a compatible URL field exists, the pipeline checks it for an exact canonical
+post URL and reuses a matching page. Rows containing short links or other URL variations are not automatically matched.
+SQLite also tracks posts saved by each profile.
+
+## Bulk workloads
+
+Imports keep a single URL list in Redis and schedule batches of 100 with cursor-based continuation jobs. Each post
+runs independently with the usual retries; a bad post does not stop the rest. Redis stores pending imports and jobs
+for up to 30 days, and the existing append-only volume preserves them across restarts. The bot sends a result for
+each completed post. Telegram replies are paced across workers and honor rate-limit responses.
+
+`WORKER_CONCURRENCY` limits active jobs per worker (default 2). For more throughput, increase it cautiously or run
+`docker compose up -d --scale worker=3`. Workers share Redis and the SQLite data volume on the same Docker host;
+SQLite uses WAL mode and a busy timeout. A Redis lock prevents simultaneous saves of the same profile/post.
+All workers share a request schedule per Notion integration. Adding workers helps downloads and AI calls, while
+[Notion's integration rate limit](https://developers.notion.com/reference/request-limits) remains a throughput limit.
+The data volume must remain shared; this SQLite deployment is not intended for separate hosts or network filesystems.
+
+A process crash between Notion page creation and SQLite recording can still cause a duplicate if the database has no
+compatible URL property. Keep a URL field mapped for recovery and matching existing pages.
+
+Run regression tests with `python -m unittest discover -s tests -v` after installing `requirements.txt`.
 
 ## Video playback in Notion
 
@@ -55,5 +109,4 @@ If neither option works, the video is still archived in S3 and the page says so.
 
 ## Next (not in MVP)
 - Instagram Reels (yt-dlp + burner-account cookies)
-- `/import` for the TikTok data-export favourites list
 - Reply to the bot's message with `#tag` / `kind:recipe` to correct a row

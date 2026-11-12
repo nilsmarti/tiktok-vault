@@ -33,7 +33,43 @@ Extract the export ZIP first. Every TikTok link in the supplied file is imported
 an entire export containing browsing history if you only want favorites. Normal post URLs, `tiktokv.com/share/video` export links, and vm/vt short links are supported.
 Repeated canonical post links are collapsed before queuing.
 
+## Homelab deployment
+
+The Ubuntu 24.04 host uses Docker Engine, Compose v2, and Buildx (`docker.io`,
+`docker-compose-v2`, and `docker-buildx`). No inbound application port is needed:
+the bot polls Telegram and media is served directly from object storage.
+
+Copy source from your workstation with:
+
+```bash
+bash scripts/copy_to_host.sh eva-pilot@192.168.10.42 "$HOME/agent/id_ed25519"
+```
+
+This uploads an explicit list of source files to `/opt/tiktok-vault` using SSH and
+sudo. It preserves host `.env`, `profiles.yaml`, `secrets/`, and Docker volumes.
+It does not start or rebuild services. On first setup, copy `profiles.example.yaml`
+to `profiles.yaml` and fill in the profile IDs. Enter credentials directly on the
+host in `.env` (use `.env.example` as a reference), and restrict it with `sudo chmod
+600 /opt/tiktok-vault/.env`. For R2, use `S3_REGION=auto`, the bucket's S3 endpoint,
+and its public custom domain as `PUBLIC_MEDIA_BASE_URL` without the bucket name.
+Set each profile's `video_mode` to `external` for public media playback.
+
+After configuration, start or update from the host:
+
+```bash
+cd /opt/tiktok-vault
+sudo docker compose up -d --build
+sudo docker compose ps
+```
+
+Containers restart automatically after a reboot. Keep backups of both named
+volumes (`data` for SQLite and `redis` for pending jobs), as well as host configuration.
+Do not use `docker compose down -v` unless you intend to delete those volumes.
+
 ## Existing databases and multiple users
+
+For the existing partner mood board's strict collection mappings, structured
+JSON imports, and deployment status, see [the compatibility guide](docs/partner-moodboard.md).
 
 Each profile selects its own Notion integration, database, AI focus, and S3 prefix. Add one profile per Telegram user;
 duplicate Telegram IDs are rejected. Profiles can target the same database or different workspaces.

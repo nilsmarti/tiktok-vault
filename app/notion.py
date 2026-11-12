@@ -80,8 +80,65 @@ class Notion:
         await self._req("POST", f"/file_uploads/{fu['id']}/complete", json={})
         return fu["id"]
 
-    async def database_schema(self, database_id: str) -> dict:
-        return (await self._req("GET", f"/databases/{database_id}"))["properties"]
+    async def database_schema(self, database_id: str, expected_title: str | None = None) -> dict:
+        database = await self._req("GET", f"/databases/{database_id}")
+        if expected_title is not None:
+            title = "".join(t.get("plain_text", t.get("text", {}).get("content", ""))
+                            for t in database.get("title", []))
+            if title != expected_title:
+                raise ValueError(f"Expected database named {expected_title!r}")
+        return database["properties"]
+
+    async def relation_pages(self, schema: dict, field: str, names: list[str]) -> dict[str, list[str]]:
+        target = schema[field]["relation"].get("database_id")
+        if not target:
+            raise ValueError(f"{field}: relation target unavailable; share the related database with the integration")
+        target_schema = await self.database_schema(target)
+        title_field = next(n for n, p in target_schema.items() if p["type"] == "title")
+        found = {}
+        for name in names:
+            ids, cursor = [], None
+            while True:
+                body = {"filter": {"property": title_field, "title": {"equals": name}}, "page_size": 100}
+                if cursor:
+                    body["start_cursor"] = cursor
+                response = await self._req("POST", f"/databases/{target}/query", json=body)
+                for page in response["results"]:
+                    actual = "".join(t.get("plain_text", t.get("text", {}).get("content", ""))
+                                     for t in page["properties"][title_field]["title"])
+                    if actual == name:
+                        ids.append(page["id"])
+                if not response.get("has_more"):
+                    break
+                cursor = response["next_cursor"]
+            found[name] = ids
+        return found
+
+    async def verify_external_media(self, page_id: str, attachments: list[dict]) -> None:
+        page = await self._req("GET", f"/pages/{page_id}")
+        files = page["properties"].get("Files & media", {}).get("files", [])
+        file_urls = {f.get("external", {}).get("url") for f in files}
+        body_media = set()
+        cursor = None
+        while True:
+            params = {"page_size": 100}
+            if cursor:
+                params["start_cursor"] = cursor
+            response = await self._req("GET", f"/blocks/{page_id}/children", params=params)
+            for block in response["results"]:
+                kind = block["type"]
+                if kind in {"video", "image", "file"}:
+                    body_media.add((kind, block[kind].get("external", {}).get("url")))
+            if not response.get("has_more"):
+                break
+            cursor = response["next_cursor"]
+        for item in attachments:
+            kind = "video" if item["content_type"].startswith("video/") else (
+                "image" if item["content_type"].startswith("image/") else "file")
+            if item["url"] not in file_urls:
+                raise ValueError(f"{item['filename']}: missing from Files & media on existing page {page_id}")
+            if (kind, item["url"]) not in body_media:
+                raise ValueError(f"{item['filename']}: missing {kind} body block on existing page {page_id}")
 
     async def find_existing(self, database_id: str, schema: dict,
                             mapping: dict[str, str], url: str) -> dict | None:
@@ -94,11 +151,13 @@ class Notion:
         return next(iter(response.get("results", [])), None)
 
     async def create_page(self, database_id: str, properties: dict, children: list[dict],
-                          cover_upload_id: str | None = None) -> dict:
+                          cover_upload_id: str | None = None, cover_url: str | None = None) -> dict:
         body: dict = {"parent": {"database_id": database_id}, "properties": properties,
                       "children": children[:100]}
         if cover_upload_id:
             body["cover"] = {"type": "file_upload", "file_upload": {"id": cover_upload_id}}
+        elif cover_url:
+            body["cover"] = {"type": "external", "external": {"url": cover_url}}
         page = await self._req("POST", "/pages", json=body)
         for i in range(100, len(children), 100):
             await self._req("PATCH", f"/blocks/{page['id']}/children", json={"children": children[i:i + 100]})
@@ -157,7 +216,7 @@ def build_properties(ex: Extraction, meta: dict, *, is_slideshow: bool, archive_
         "Status": {"select": {"name": "Inbox"}},
         "Format": {"select": {"name": "Slideshow" if is_slideshow else "Video"}},
         "Confidence": {"number": round(ex.confidence, 2)},
-        "Archive": {"rich_text": rt(archive_uri)},
+        "Archive": {"rich_text": rt(archive_uri, archive_uri if archive_uri.startswith(("https://", "http://")) else None)},
     }
     if posted:
         props["Posted"] = {"date": {"start": posted}}
@@ -166,6 +225,9 @@ def build_properties(ex: Extraction, meta: dict, *, is_slideshow: bool, archive_
 
 def build_body(ex: Extraction, meta: dict, transcript: str, media_blocks: list[dict]) -> list[dict]:
     blocks: list[dict] = list(media_blocks)
+    if source := meta.get("source_record"):
+        blocks.append(paragraph(f"Creator: {source['creator']} (@{source['creator_id']})"))
+        blocks.append(paragraph(f"Imported collection: {source['collection_name']}"))
     caption = meta.get("description") or ""
     if caption:
         blocks.append(_block("quote", {"rich_text": rt(caption)}))

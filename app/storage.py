@@ -34,5 +34,10 @@ class Storage:
     def uri(self, key: str) -> str:
         return f"s3://{self.bucket}/{key}"
 
+    def get_json(self, key: str) -> dict:
+        response = self.client.get_object(Bucket=self.bucket, Key=key)
+        with response["Body"] as body:
+            return json.loads(body.read())
+
     def public_url(self, key: str) -> str | None:
         return f"{self.public_base.rstrip('/')}/{key}" if self.public_base else None

@@ -20,6 +20,7 @@ class Profile:
     notion_properties: dict[str, str] = field(default_factory=dict)
     focus: str = ""  # hint for the LLM: what this person saves stuff for
     video_mode: str = "auto"  # auto | upload (into Notion) | external (public S3 URL)
+    notion_mode: str = "standard"  # standard | moodboard (strict shortcut mappings)
 
 
 @dataclass(frozen=True)
@@ -67,6 +68,9 @@ def _load_profiles(path: Path) -> dict[int, Profile]:
         mode = p.get("video_mode", "auto")
         if mode not in VIDEO_MODES:
             raise ValueError(f"profile {name}: video_mode must be one of {VIDEO_MODES}")
+        notion_mode = p.get("notion_mode", "standard")
+        if notion_mode not in {"standard", "moodboard"}:
+            raise ValueError(f"profile {name}: notion_mode must be standard or moodboard")
         uid = int(p["telegram_user_id"])
         if uid in profiles:
             raise ValueError(f"duplicate telegram_user_id: {uid}")
@@ -81,6 +85,7 @@ def _load_profiles(path: Path) -> dict[int, Profile]:
             notion_properties=mapping,
             focus=p.get("focus", ""),
             video_mode=mode,
+            notion_mode=notion_mode,
         )
     if not profiles:
         raise ValueError(f"no profiles defined in {path}")

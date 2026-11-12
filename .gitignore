@@ -1,0 +1,11 @@
+.env
+.env.*
+!.env.example
+profiles.yaml
+secrets/
+__pycache__/
+*.py[cod]
+.venv/
+/collection_videos.json
+
+/private-reports/

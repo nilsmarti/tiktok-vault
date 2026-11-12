@@ -19,3 +19,6 @@ profiles:
     notion_database_id: fedcba9876543210fedcba9876543210
     focus: "creative inspiration for art/design projects: techniques, aesthetics, colour palettes, materials"
     video_mode: auto
+    # Existing strict mood board + Android shortcut messages:
+    # notion_mode: moodboard
+    # video_mode: external

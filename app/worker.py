@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import json
 import logging
 import os
 
@@ -75,11 +76,12 @@ def _format(r: pipeline.Result) -> str:
     return "\n".join(lines)
 
 
-async def process_tiktok(ctx, user_id: int, chat_id: int, message_id: int, url: str):
+async def process_tiktok(ctx, user_id: int, chat_id: int, message_id: int, url: str, bookmark: dict | None = None):
     s = ctx["s"]
     profile = s.profiles[user_id]
     try:
-        result = await pipeline.run(s, ctx["http"], ctx["storage"], ctx["store"], profile, url, redis=ctx["redis"])
+        result = await pipeline.run(s, ctx["http"], ctx["storage"], ctx["store"], profile, url,
+                                    redis=ctx["redis"], bookmark=bookmark)
     except PermanentError as e:
         await _reply(ctx, chat_id, message_id, f"❌ Can't save {url}\n{str(e)[:300]}")
         return
@@ -93,18 +95,21 @@ async def process_tiktok(ctx, user_id: int, chat_id: int, message_id: int, url: 
 
 
 async def import_favorites(ctx, user_id: int, chat_id: int, message_id: int,
-                           import_key: str, offset: int = 0):
+                           import_key: str, offset: int = 0, structured: bool = False):
     # The URL list lives once in Redis; continuation jobs carry only a cursor.
     try:
         batch = await ctx["redis"].lrange(import_key, offset, offset + 99)
         for raw in batch:
-            url = raw.decode() if isinstance(raw, bytes) else raw
-            job_id = f"{user_id}:" + hashlib.sha256(identity(url).encode()).hexdigest()
+            value = raw.decode() if isinstance(raw, bytes) else raw
+            record = json.loads(value) if structured else {"url": value}
+            url = record["url"]
+            job_id = f"{user_id}:{import_key}:" + hashlib.sha256(identity(url).encode()).hexdigest()
             await ctx["redis"].enqueue_job("process_tiktok", user_id, chat_id, message_id, url,
+                                           bookmark=record.get("bookmark"),
                                            _job_id=job_id, _expires=30 * 86400)
         if len(batch) == 100:
             await ctx["redis"].enqueue_job("import_favorites", user_id, chat_id, message_id,
-                import_key, offset + 100, _expires=30 * 86400,
+                import_key, offset + 100, structured=structured, _expires=30 * 86400,
                 _job_id=f"{import_key}:{offset + 100}")
     except Exception as e:
         if ctx["job_try"] < MAX_TRIES:
